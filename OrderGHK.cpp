@@ -98,17 +98,15 @@ for(int k=0; k<n; k++){
        *res += prod;
   }
        *res /= nrep;
-    if(*res == 0){
+    if(*res == 0 || isnan(*res)){
        return -1e6;
   }
   else{
        return log(*res);
   }
 }
-  
-  
-  
-  
+
+
 // [[Rcpp::export]]
 double ghkLik(arma::vec mu, arma::mat R, 
               arma::vec lower, arma::vec upper, int nrep) {
@@ -135,10 +133,86 @@ double ghkLik(arma::vec mu, arma::mat R,
       *res += prod;
     }
     *res /= nrep;
-    if(*res == 0){
+    if(*res == 0 || isnan(*res)){
       return -1e6;
     }
     else{
       return log(*res);
     }
   }
+
+
+
+// [[Rcpp::export]]
+Rcpp::List ordertrack(arma::vec mu, arma::mat R, arma::vec lower, arma::vec upper){
+    
+    const double eps = std::numeric_limits<double>::epsilon();
+    
+    int n = R.n_cols;
+    arma::mat ap = join_rows(linspace<vec>(1, n, n), lower);
+    arma::mat bp = join_rows(linspace<vec>(1, n, n), upper);
+    
+    arma::vec y;  y.zeros(n);
+    double am, bm, ctmp, vtmp, dem, de, ai, bi, s;
+    
+    int im; arma::mat tmp;  arma::mat mattmp;
+    arma::vec d = arma::sqrt(arma::diagvec(R));
+    
+    for(int i = 0; i<n; i++){
+        if(d(i) > 0){
+            R(arma::span::all, i) = R(arma::span::all, i)/d(i);
+            R(i, arma::span::all) = R(i, arma::span::all)/d(i);
+            ap(i,1) = ap(i,1)/d(i); bp(i,1) = bp(i,1)/d(i);
+        }
+    }
+    
+    for(int k=0; k<n; k++){
+        im = k;  vtmp = 0;  dem = 1.0; s = 0;
+        for(int i=k; i<n; i++){
+            if(R(i,i) > eps){
+                ctmp = sqrt(R::fmax2(R(i,i), 0 ));
+                if(k == 0){s = 0;}
+                if(i > 0 && k > 0){
+                    mattmp = R(i, arma::span(0,k-1))*y(arma::span(0,k-1)); s = mattmp(0,0);
+                }
+                ai = (ap(i,1)-s)/(ctmp);  bi = (bp(i,1)-s)/(ctmp);
+                de = R::pnorm(bi,0,1,1,0) - R::pnorm(ai,0,1,1,0);
+                if(de<=dem){ vtmp = ctmp;  dem = de;  am = ai;  bm = bi; im = i;}
+            }
+        }
+        
+        if(im > k){
+            ap.swap_rows(im,k); bp.swap_rows(im,k);
+            R(im, im) = R(k,k);
+            if(k > 0){
+                R(arma::span::all,arma::span(0,k-1)).swap_rows(im,k);
+            }
+            if( n-im >= 2){
+                R(arma::span(im+1,n-1),arma::span::all).swap_cols(im,k);
+            }
+            if(im - k >= 2){
+                tmp = R(arma::span(k+1,im-1),k); R(arma::span(k+1,im-1),k) = R(im,arma::span(k+1,im-1)).t();
+                R(im,arma::span(k+1,im-1)) = tmp.t();
+            }
+        }
+        
+        if(n - k >= 2)  R(k,arma::span(k+1,n-1)).zeros();
+        if(vtmp > eps*k){
+            R(k,k) = vtmp;
+            for(int i=k+1; i<n; i++){
+                R(i,k) = R(i,k)/(vtmp);
+                R(i, arma::span(k+1,i)) = R(i, arma::span(k+1,i))-R(i,k)*R(arma::span(k+1,i),k).t();
+            }
+            if(std::abs(dem) > eps){
+                y(k) = (R::dnorm(am,0,1,0) - R::dnorm(bm,0,1,0) )/ (dem);
+            }else{
+                if(am < -10) {y(k) = bm;}
+                else if(bm > 10) {y(k) = am;}
+                else{y(k) = (am+bm)/2;}
+            }
+        }
+        else{R(arma::span(k,n-1), k).zeros(); y(k) = 0; }
+    }
+    return List::create(Named("ap") = ap,
+                        Named("bp") = bp );
+}
